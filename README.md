@@ -11,6 +11,7 @@ I don't currently have the desire to implement the more advance features of prot
 * watch
 * h02
 * gt06
+* huabao (JT/T 808, including the OBD2 extension — RPM, coolant temperature, battery voltage, MAF, throttle position, VIN, ICCID, ...)
 
 ## Configuration
 
@@ -63,4 +64,7 @@ Listen=":5093"
 
 [protocol.h02]
 Listen=":5013"
+
+[protocol.huabao]
+Listen=":5015"
 ```

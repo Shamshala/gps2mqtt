@@ -93,6 +93,28 @@ type Packet struct {
 	TerminalModel  string `json:"model"`
 	TerminalID     string `json:"terminal_id"`
 
+	// JT/T 808 OBD2 extension (additional information IDs 0x80..0x97, 0xA0, 0xCC, 0x9F)
+	// Reference: "JT T808-2013 OBD2 PROTOCOL" annex; Feifan GPS example 20210310.
+	Odometer       float64 `json:"odometer"`        // km        (0x01)
+	TotalMileage   float64 `json:"total_mileage"`   // km        (0x8C)
+	OBDSpeed       float64 `json:"obd_speed"`       // km/h      (0x80)
+	RPM            float64 `json:"rpm"`             // rpm       (0x81)
+	BatteryVoltage float64 `json:"battery_voltage"` // V         (0x82, raw * 0.1)
+	EngineLoad     float64 `json:"engine_load"`     // %         (0x83)
+	CoolantTemp    float64 `json:"coolant_temp"`    // °C        (0x84, raw - 40)
+	InstantFuel    float64 `json:"instant_fuel"`    // mL/h      (0x85)
+	IntakeAirTemp  float64 `json:"intake_air_temp"` // °C        (0x86, raw - 40)
+	MAF            float64 `json:"maf"`             // g/s       (0x87, raw * 0.01 per OBD-II PID 0x10 convention)
+	MAP            float64 `json:"map"`             // kPa       (0x88)
+	ThrottlePos    float64 `json:"throttle_pos"`    // %         (0x89)
+	FuelPressure   float64 `json:"fuel_pressure"`   // kPa       (0x8A)
+	FuelLevel      float64 `json:"fuel_level"`      // %         (0x8E)
+
+	VIN         string `json:"vin,omitempty"`         // (0x8B)
+	ICCID       string `json:"iccid,omitempty"`       // (0xCC)
+	NetworkInfo string `json:"network,omitempty"`     // (0x9F) MCC,MNC,LAC,CellID,RSSI[,neighbours...]
+	FaultCodes  string `json:"fault_codes,omitempty"` // (0xA0) comma-separated DTCs
+
 	header header
 }
 

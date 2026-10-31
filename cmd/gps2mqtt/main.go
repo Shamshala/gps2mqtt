@@ -95,27 +95,48 @@ func main() {
 		if _, has := seen[deviceID]; !has {
 			seen[deviceID] = struct{}{}
 
-			meta, has := cfg.Meta[deviceID]
-			if has && meta.Name != "" {
-				hc := homeassistant.AutoConfiguration{
-					Name:                meta.Name,
-					Icon:                meta.Icon,
-					StateTopic:          topicPrefix,
-					AvailabilityTopic:   "gps2mqtt/availability",
-					JSONAttributesTopic: topicPrefix + "/attributes",
-					SourceType:          "gps",
-					UniqueID:            "gps2mqtt_" + deviceID,
+			meta, hasMeta := cfg.Meta[deviceID]
+			if hasMeta && meta.Name != "" {
+				// Protocols that know how to describe themselves to Home
+				// Assistant (currently: huabao with the OBD2 extension)
+				// publish a richer entity set — device_tracker + per-OBD-field
+				// sensors + derived binary_sensors — all grouped under one
+				// Device card in HA.
+				if d, ok := msg.(mqtt.Discoverer); ok {
+					msgs, err := d.HomeAssistantDiscovery(mqtt.DeviceMeta{
+						Name: meta.Name,
+						Icon: meta.Icon,
+					})
+					if err != nil {
+						log.Error().Err(err).Msg("Failed to build HA discovery messages.")
+					}
+					for _, m := range msgs {
+						log.Trace().Str("topic", m.Topic).RawJSON("message", m.Payload).Msg("Publishing config to MQTT")
+						c.Publish(m.Topic, 0, true, m.Payload) // TODO error check
+					}
+				} else {
+					// Legacy single-device_tracker discovery for protocols
+					// that don't implement mqtt.Discoverer (gt06, h02, watch).
+					hc := homeassistant.AutoConfiguration{
+						Name:                meta.Name,
+						Icon:                meta.Icon,
+						StateTopic:          topicPrefix,
+						AvailabilityTopic:   "gps2mqtt/availability",
+						JSONAttributesTopic: topicPrefix + "/attributes",
+						SourceType:          "gps",
+						UniqueID:            "gps2mqtt_" + deviceID,
+					}
+
+					b, err := json.Marshal(hc)
+					if err != nil {
+						log.Fatal().Err(err).Msg("Failed to marshal configuration message.")
+					}
+
+					topic := "homeassistant/device_tracker/" + mqttID + "/config"
+					log.Trace().Str("topic", topic).RawJSON("message", b).Msg("Publishing config to MQTT")
+
+					c.Publish(topic, 0, true, b) // TODO error check
 				}
-
-				b, err := json.Marshal(hc)
-				if err != nil {
-					log.Fatal().Err(err).Msg("Failed to marshal configuration message.")
-				}
-
-				topic := "homeassistant/device_tracker/" + mqttID + "/config"
-				log.Trace().Str("topic", topic).RawJSON("message", b).Msg("Publishing config to MQTT")
-
-				c.Publish(topic, 0, true, b) // TODO error check
 			}
 		}
 

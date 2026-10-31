@@ -146,6 +146,92 @@ func Test7DDecode(t *testing.T) {
 	assert.Equal(t, "", packet.TerminalID)
 }
 
+// Location report from an OBD GPS tracker installed in a BMW, taken from a
+// Traccar log. Identifying fields (terminal ID, ICCID, VIN, cell, position)
+// were replaced with fake values and the checksum recomputed; OBD values are
+// as captured. Vehicle was driving at 11.1 km/h (GPS) / 19 km/h (OBD).
+// RPM 1428, engine load 38 %.
+func TestLocationReportOBD_Driving(t *testing.T) {
+	fromGPS, err := hex.DecodeString(
+		"7e0200008d012345678901007b000000000000000302fc445800dc0c080004006f00f5" +
+			"240318142358010400042eb6cc14383930303030303030303030303030303030304630" +
+			"011f9f133233302c30332c313233342c616263642c33318202008e8001138102059483" +
+			"012684015d85021d1c86012d870209048801618901298b115742413054455354303030" +
+			"3030303030318c0400042eb6a0005d7e")
+	assert.NoError(t, err)
+
+	p := &Parser{reader: bufio.NewReader(bytes.NewReader(fromGPS))}
+	packet, err := p.ReadPacket()
+	assert.NoError(t, err)
+
+	// Location
+	assert.Equal(t, "012345678901", packet.DeviceID)
+	assert.Equal(t, time.Date(2024, 03, 18, 14, 23, 58, 0, time.FixedZone("GMT+8", 8*60*60)), packet.Timestamp)
+	assert.InDelta(t, 50.087000, packet.Latitude, 1e-6)
+	assert.InDelta(t, 14.421000, packet.Longitude, 1e-6)
+	assert.Equal(t, 4.0, packet.Altitude)
+	assert.InDelta(t, 11.1, packet.Speed, 1e-9)
+	assert.Equal(t, 245.0, packet.Heading)
+	assert.Equal(t, true, packet.Position)
+
+	// Network / SIM
+	assert.Equal(t, 31.0, packet.RSSI)
+	assert.Equal(t, "8900000000000000000F", packet.ICCID)
+	assert.Equal(t, "230,03,1234,abcd,31", packet.NetworkInfo)
+
+	// OBD2 — moving
+	assert.InDelta(t, 27410.2, packet.Odometer, 1e-9)
+	assert.InDelta(t, 27410.2, packet.TotalMileage, 1e-9)
+	assert.Equal(t, 19.0, packet.OBDSpeed)
+	assert.Equal(t, 1428.0, packet.RPM)
+	assert.InDelta(t, 14.2, packet.BatteryVoltage, 1e-9)
+	assert.Equal(t, 38.0, packet.EngineLoad)
+	assert.Equal(t, 53.0, packet.CoolantTemp)  // 93 - 40
+	assert.Equal(t, 7452.0, packet.InstantFuel)
+	assert.Equal(t, 5.0, packet.IntakeAirTemp) // 45 - 40
+	assert.InDelta(t, 23.08, packet.MAF, 1e-9) // 2308 * 0.01
+	assert.Equal(t, 97.0, packet.MAP)
+	assert.Equal(t, 41.0, packet.ThrottlePos)
+	assert.Equal(t, "WBA0TEST000000001", packet.VIN)
+	assert.Equal(t, "", packet.FaultCodes)
+}
+
+// Same tracker, 30 seconds later, vehicle stopped at idle.
+func TestLocationReportOBD_Idling(t *testing.T) {
+	fromGPS, err := hex.DecodeString(
+		"7e0200008a012345678901007d02000000000000000302fc440d00dc0a070004000000" +
+			"fa240318142428010400042eb7cc143839303030303030303030303030303030303046" +
+			"30011f9f133233302c30332c313233342c616263642c333182020093810202c683013e" +
+			"84015d8502157586012d870204a288016389013e8b1157424130544553543030303030" +
+			"303030318c0400042eb7a000097e")
+	assert.NoError(t, err)
+
+	p := &Parser{reader: bufio.NewReader(bytes.NewReader(fromGPS))}
+	packet, err := p.ReadPacket()
+	assert.NoError(t, err)
+
+	assert.Equal(t, "012345678901", packet.DeviceID)
+	assert.Equal(t, time.Date(2024, 03, 18, 14, 24, 28, 0, time.FixedZone("GMT+8", 8*60*60)), packet.Timestamp)
+	assert.InDelta(t, 50.086925, packet.Latitude, 1e-6)
+	assert.InDelta(t, 14.420487, packet.Longitude, 1e-6)
+	assert.Equal(t, 0.0, packet.Speed)
+
+	// Stopped — 0x80 OBD speed not transmitted, stays at zero-value.
+	assert.Equal(t, 0.0, packet.OBDSpeed)
+
+	// OBD2 — engine idling
+	assert.InDelta(t, 27410.3, packet.Odometer, 1e-9)
+	assert.Equal(t, 710.0, packet.RPM)
+	assert.InDelta(t, 14.7, packet.BatteryVoltage, 1e-9) // alternator running
+	assert.Equal(t, 62.0, packet.EngineLoad)
+	assert.Equal(t, 53.0, packet.CoolantTemp)
+	assert.Equal(t, 5493.0, packet.InstantFuel)
+	assert.InDelta(t, 11.86, packet.MAF, 1e-9)
+	assert.Equal(t, 99.0, packet.MAP) // ≈ atmospheric pressure at idle
+	assert.Equal(t, 62.0, packet.ThrottlePos)
+	assert.Equal(t, "WBA0TEST000000001", packet.VIN)
+}
+
 func TestFromTraccarLog(t *testing.T) {
 	f, err := os.Open("test_data/tracker-server.log")
 	if err != nil {
