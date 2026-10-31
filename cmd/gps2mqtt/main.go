@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/freman/gps2mqtt"
+	"github.com/freman/gps2mqtt/filter"
 	"github.com/freman/gps2mqtt/homeassistant"
 	"github.com/freman/gps2mqtt/mqtt"
 	"github.com/freman/gps2mqtt/protocol"
@@ -91,6 +92,7 @@ func main() {
 	}
 
 	seen := make(map[string]struct{})
+	posFilter := filter.New(cfg.Filter)
 
 	for msg := range chMessage {
 		mqttID := msg.MQTTID()
@@ -146,6 +148,16 @@ func main() {
 		}
 
 		if msg.Valid() {
+			if pos, ok := msg.(mqtt.Positioner); ok {
+				reason, publish := posFilter.Apply(deviceID, pos)
+				if reason != "" {
+					log.Debug().Str("device", deviceID).Str("reason", reason).Bool("published", publish).Msg("Position filtered")
+				}
+				if !publish {
+					continue
+				}
+			}
+
 			b, err := json.Marshal(msg)
 			if err != nil {
 				log.Fatal().Err(err).Msg("Failed to marshal update message.")

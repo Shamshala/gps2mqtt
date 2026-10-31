@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/freman/gps2mqtt/filter"
 )
 
 type Config struct {
@@ -13,6 +15,7 @@ type Config struct {
 
 	MQTT      ConfigMQTT
 	Status    ConfigStatus
+	Filter    filter.Config
 	Meta      map[string]ConfigMeta
 	Protocols map[string]toml.Primitive `toml:"protocol"`
 }
@@ -49,6 +52,7 @@ func LoadConfiguration(file string) (*Config, error) {
 			Enabled: false,
 			Listen:  "127.0.0.1:8080",
 		},
+		Filter: filter.DefaultConfig(),
 	}
 
 	var err error

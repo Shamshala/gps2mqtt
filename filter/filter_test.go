@@ -1,0 +1,133 @@
+package filter
+
+import (
+	"testing"
+	"time"
+
+	"github.com/freman/gps2mqtt/mqtt"
+	"github.com/stretchr/testify/assert"
+)
+
+type fakePacket struct {
+	fix    mqtt.Fix
+	reason string
+}
+
+func (p *fakePacket) GPSFix() mqtt.Fix { return p.fix }
+
+func (p *fakePacket) HoldPosition(lat, lon float64, reason string) {
+	p.fix.Latitude, p.fix.Longitude, p.reason = lat, lon, reason
+}
+
+var t0 = time.Date(2024, 3, 18, 14, 0, 0, 0, time.UTC)
+
+func moving(sec int, lat, lon float64) *fakePacket {
+	return &fakePacket{fix: mqtt.Fix{
+		Time:      t0.Add(time.Duration(sec) * time.Second),
+		Latitude:  lat,
+		Longitude: lon,
+		Speed:     50,
+		Valid:     true,
+	}}
+}
+
+func TestAcceptsPlausibleTrack(t *testing.T) {
+	f := New(DefaultConfig())
+
+	for i, p := range []*fakePacket{
+		moving(0, 50.0870, 14.4210),
+		moving(10, 50.0871, 14.4215), // ~40 m in 10 s
+		moving(20, 50.0872, 14.4220),
+	} {
+		reason, publish := f.Apply("dev", p)
+		assert.Equal(t, "", reason, i)
+		assert.True(t, publish, i)
+		assert.Equal(t, "", p.reason, i)
+	}
+}
+
+func TestRejectsJump(t *testing.T) {
+	f := New(DefaultConfig())
+	f.Apply("dev", moving(0, 50.0870, 14.4210))
+
+	// ~11 km in 10 s
+	p := moving(10, 50.1870, 14.4210)
+	reason, publish := f.Apply("dev", p)
+	assert.Equal(t, "speed", reason)
+	assert.True(t, publish)
+	assert.Equal(t, 50.0870, p.fix.Latitude)
+	assert.Equal(t, 14.4210, p.fix.Longitude)
+	assert.Equal(t, "speed", p.reason)
+
+	// The track continues from the original position.
+	reason, _ = f.Apply("dev", moving(20, 50.0871, 14.4215))
+	assert.Equal(t, "", reason)
+}
+
+func TestRecoversFromBadReference(t *testing.T) {
+	f := New(DefaultConfig())
+	f.Apply("dev", moving(0, 50.1870, 14.4210)) // outlier accepted as the first fix
+
+	for i := 1; i < maxConsecutiveRejects; i++ {
+		reason, _ := f.Apply("dev", moving(i*10, 50.0870, 14.4210))
+		assert.Equal(t, "speed", reason, i)
+	}
+
+	reason, _ := f.Apply("dev", moving(maxConsecutiveRejects*10, 50.0870, 14.4210))
+	assert.Equal(t, "", reason)
+}
+
+func TestHoldsWhileStanding(t *testing.T) {
+	f := New(DefaultConfig())
+	f.Apply("dev", moving(0, 50.0870, 14.4210))
+
+	p := moving(10, 50.0875, 14.4218) // drift while parked
+	p.fix.Speed = 0
+	reason, publish := f.Apply("dev", p)
+	assert.Equal(t, "static", reason)
+	assert.True(t, publish)
+	assert.Equal(t, 50.0870, p.fix.Latitude)
+}
+
+func TestRejectsInvalidAndZero(t *testing.T) {
+	f := New(DefaultConfig())
+
+	zero := moving(0, 0, 0)
+	reason, publish := f.Apply("dev", zero)
+	assert.Equal(t, "zero", reason)
+	assert.False(t, publish, "nothing to fall back on yet")
+
+	f.Apply("dev", moving(10, 50.0870, 14.4210))
+
+	invalid := moving(20, 50.2000, 14.6000)
+	invalid.fix.Valid = false
+	reason, publish = f.Apply("dev", invalid)
+	assert.Equal(t, "invalid", reason)
+	assert.True(t, publish)
+	assert.Equal(t, 50.0870, invalid.fix.Latitude)
+}
+
+func TestDevicesAreIndependent(t *testing.T) {
+	f := New(DefaultConfig())
+	f.Apply("a", moving(0, 50.0870, 14.4210))
+
+	reason, _ := f.Apply("b", moving(10, 49.1950, 16.6080))
+	assert.Equal(t, "", reason)
+}
+
+func TestDisabled(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Enabled = false
+	f := New(cfg)
+
+	p := moving(0, 0, 0)
+	reason, publish := f.Apply("dev", p)
+	assert.Equal(t, "", reason)
+	assert.True(t, publish)
+}
+
+func TestDistanceKm(t *testing.T) {
+	// Prague -> Brno, roughly 185 km.
+	d := distanceKm(mqtt.Fix{Latitude: 50.0870, Longitude: 14.4210}, mqtt.Fix{Latitude: 49.1950, Longitude: 16.6080})
+	assert.InDelta(t, 185, d, 5)
+}

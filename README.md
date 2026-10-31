@@ -25,6 +25,17 @@ Provides configuration for connecting to your MQTT server
 
 Provides configuation for the http status endpoint
 
+### filter block
+
+Holds back implausible GPS fixes, similar to Traccar's position filters. A rejected fix is published with the last accepted coordinates and a `position_filter` attribute naming the reason, so the rest of the data still arrives. Currently applies to the huabao protocol.
+
+* `Enabled` - turn the filter on or off (default `true`)
+* `Invalid` - reject fixes the tracker flags as not valid (default `true`)
+* `Zero` - reject 0,0 coordinates (default `true`)
+* `MinSatellites` - reject fixes with fewer satellites, if the tracker reports them (default `0`, disabled)
+* `MaxSpeed` - reject jumps implying a speed above this many km/h (default `250`, `0` disables)
+* `StaticSpeed` - hold the position while the reported speed is below this many km/h, which removes drift while parked (default `1`, `0` disables)
+
 ### meta blocks
 
 Each meta block defines a known tracker ID, trackers that connect and try to communicate will not be permitted to do so unless they have a corresponding meta block
@@ -50,6 +61,11 @@ Brokers = [
 [status]
 Enabled = false
 Listen = "localhost:8080"
+
+[filter]
+Enabled = true
+MaxSpeed = 250
+StaticSpeed = 1
 
 [meta."SA*91678358119"]
 Name = "Motorbike Tracker"

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/freman/gps2mqtt/checksum"
+	"github.com/freman/gps2mqtt/mqtt"
 )
 
 const (
@@ -115,7 +116,28 @@ type Packet struct {
 	NetworkInfo string `json:"network,omitempty"`     // (0x9F) MCC,MNC,LAC,CellID,RSSI[,neighbours...]
 	FaultCodes  string `json:"fault_codes,omitempty"` // (0xA0) comma-separated DTCs
 
+	// Set when the position filter replaced the coordinates with the last
+	// accepted ones; holds the rejection reason.
+	PositionFilter string `json:"position_filter,omitempty"`
+
 	header header
+}
+
+func (p *Packet) GPSFix() mqtt.Fix {
+	return mqtt.Fix{
+		Time:       p.Timestamp,
+		Latitude:   p.Latitude,
+		Longitude:  p.Longitude,
+		Speed:      p.Speed,
+		Valid:      p.Position,
+		Satellites: p.Satellites,
+	}
+}
+
+func (p *Packet) HoldPosition(lat, lon float64, reason string) {
+	p.Latitude = lat
+	p.Longitude = lon
+	p.PositionFilter = reason
 }
 
 func (p *Packet) MQTTID() string {
