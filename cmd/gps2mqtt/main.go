@@ -53,7 +53,14 @@ func main() {
 		opts.AddBroker(broker)
 	}
 
-	opts.SetWill("gps2mqtt/availability", "offline", 0, false)
+	// Availability is retained in both directions so HA sees the current state
+	// even when it (re)subscribes after we connected. "online" is re-published
+	// on every (re)connect because the broker fires the retained LWT whenever
+	// the connection drops, and paho reconnects automatically.
+	opts.SetWill("gps2mqtt/availability", "offline", 0, true)
+	opts.SetOnConnectHandler(func(c paho.Client) {
+		c.Publish("gps2mqtt/availability", 0, true, "online") // TODO error check
+	})
 
 	c := paho.NewClient(opts)
 	if token := c.Connect(); token.Wait() && token.Error() != nil {
@@ -82,8 +89,6 @@ func main() {
 			}
 		}()
 	}
-
-	c.Publish("gps2mqtt/availability", 0, false, "online") // TODO error check
 
 	seen := make(map[string]struct{})
 
