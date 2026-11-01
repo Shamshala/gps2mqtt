@@ -39,6 +39,8 @@ type Fix struct {
 	Speed      float64 // km/h as reported by the device
 	Valid      bool    // device reports a valid GNSS fix
 	Satellites int64   // 0 when the device doesn't report it
+
+	VehicleSpeed float64 // km/h from the vehicle (OBD), 0 when unknown
 }
 
 // Positioner is implemented by packet types that carry a GPS position, so

@@ -1,6 +1,7 @@
 package filter
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -93,33 +94,75 @@ func TestAcceptsCatchUpAfterFrozenPosition(t *testing.T) {
 	assert.Equal(t, "", reason)
 }
 
-func TestRejectsJumpFasterThanReported(t *testing.T) {
+func withSpeed(p *fakePacket, gps, obd float64) *fakePacket {
+	p.fix.Speed, p.fix.VehicleSpeed = gps, obd
+	return p
+}
+
+func TestRejectsJumpBeyondAcceleration(t *testing.T) {
 	f := New(DefaultConfig())
+	f.Apply("dev", withSpeed(moving(0, 50.0870, 14.4210), 30, 0))
 
-	p := moving(0, 50.0870, 14.4210)
-	p.fix.Speed = 30
-	f.Apply("dev", p)
-
-	// ~400 m in 10 s = 144 km/h, under MaxSpeed but well above 30 * 1.5 + 20.
-	p = moving(10, 50.0906, 14.4210)
-	p.fix.Speed = 30
+	// ~417 m in 10 s = 150 km/h on average, under MaxSpeed, but at 30 km/h
+	// on both ends the car can cover at most ~217 m.
+	p := withSpeed(moving(10, 50.09075, 14.4210), 30, 0)
 	reason, _ := f.Apply("dev", p)
-	assert.Equal(t, "speed", reason)
+	assert.Equal(t, "jump", reason)
 	assert.Equal(t, 50.0870, p.fix.Latitude)
 }
 
-func TestIgnoresShortJumps(t *testing.T) {
+func TestAcceptsHardAcceleration(t *testing.T) {
+	f := New(DefaultConfig())
+	f.Apply("dev", withSpeed(moving(0, 50.0870, 14.4210), 5, 0))
+
+	// 5 -> 80 km/h in 10 s, ~120 m.
+	reason, _ := f.Apply("dev", withSpeed(moving(10, 50.08808, 14.4210), 80, 0))
+	assert.Equal(t, "", reason)
+}
+
+func TestPrefersVehicleSpeed(t *testing.T) {
 	f := New(DefaultConfig())
 
-	p := moving(0, 50.0870, 14.4210)
-	p.fix.Speed = 5
-	f.Apply("dev", p)
-
-	// ~90 m in 10 s = 32 km/h at a reported 5 km/h, but below JumpDistance.
-	p = moving(10, 50.0878, 14.4210)
-	p.fix.Speed = 5
-	reason, _ := f.Apply("dev", p)
+	// GPS says standing, OBD says 30 km/h: not static.
+	reason, _ := f.Apply("dev", withSpeed(moving(0, 50.0870, 14.4210), 0, 30))
 	assert.Equal(t, "", reason)
+	reason, _ = f.Apply("dev", withSpeed(moving(10, 50.0871, 14.4214), 0, 30))
+	assert.Equal(t, "", reason)
+
+	// GPS claims 150 km/h along with the jump, OBD says 30 km/h.
+	reason, _ = f.Apply("dev", withSpeed(moving(20, 50.09085, 14.4214), 150, 30))
+	assert.Equal(t, "jump", reason)
+}
+
+func TestDryRun(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DryRun = true
+	f := New(cfg)
+
+	zero := moving(0, 0, 0)
+	reason, publish := f.Apply("dev", zero)
+	assert.Equal(t, "zero", reason)
+	assert.True(t, publish)
+	assert.Equal(t, "zero (dry-run)", zero.reason)
+
+	f.Apply("dev", moving(10, 50.0870, 14.4210))
+
+	p := moving(20, 50.1870, 14.4210)
+	reason, publish = f.Apply("dev", p)
+	assert.Equal(t, "speed", reason)
+	assert.True(t, publish)
+	assert.Equal(t, 50.1870, p.fix.Latitude, "coordinates untouched")
+	assert.Equal(t, "speed (dry-run)", p.reason)
+}
+
+func TestMaxDistance(t *testing.T) {
+	v := 30 / 3.6
+
+	// Accelerate 30 -> 126 km/h for 6.7 s, brake back for 3.3 s.
+	assert.InDelta(t, 216.7, maxDistance(v, v, 10, 4, 8, math.Inf(1)), 0.5)
+
+	// Capped by vmax: 10 s at 30 km/h.
+	assert.InDelta(t, 83.3, maxDistance(v, v, 10, 4, 8, v), 0.5)
 }
 
 func TestHoldsWhileStanding(t *testing.T) {

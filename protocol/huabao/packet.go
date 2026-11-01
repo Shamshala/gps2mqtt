@@ -131,6 +131,8 @@ func (p *Packet) GPSFix() mqtt.Fix {
 		Speed:      p.Speed,
 		Valid:      p.Position,
 		Satellites: p.Satellites,
+
+		VehicleSpeed: p.OBDSpeed,
 	}
 }
 
