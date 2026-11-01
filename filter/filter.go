@@ -17,15 +17,25 @@ type Config struct {
 	MinSatellites int64   // reject fixes with fewer satellites, 0 disables
 	MaxSpeed      float64 // km/h, reject jumps implying a higher speed, 0 disables
 	StaticSpeed   float64 // km/h, below this the vehicle is treated as standing and the position is held, 0 disables
+
+	// Jumps longer than JumpDistance metres are rejected when they imply a
+	// speed above reported speed * SpeedFactor + SpeedMargin (km/h).
+	// JumpDistance 0 disables this check.
+	JumpDistance float64
+	SpeedFactor  float64
+	SpeedMargin  float64
 }
 
 func DefaultConfig() Config {
 	return Config{
-		Enabled:     true,
-		Invalid:     true,
-		Zero:        true,
-		MaxSpeed:    250,
-		StaticSpeed: 1,
+		Enabled:      true,
+		Invalid:      true,
+		Zero:         true,
+		MaxSpeed:     250,
+		StaticSpeed:  1,
+		JumpDistance: 100,
+		SpeedFactor:  1.5,
+		SpeedMargin:  20,
 	}
 }
 
@@ -62,6 +72,13 @@ func (f *Filter) Apply(device string, p mqtt.Positioner) (string, bool) {
 
 	reason := f.check(st, fix)
 	if reason == "" {
+		// Trackers sometimes repeat a frozen position while driving and then
+		// catch up. Keep the time the position was first reported so the
+		// catch-up jump is judged over the whole interval.
+		if st != nil && fix.Latitude == st.last.Latitude && fix.Longitude == st.last.Longitude {
+			return "", true
+		}
+
 		f.state[device] = &deviceState{last: fix}
 		return "", true
 	}
@@ -92,19 +109,32 @@ func (f *Filter) check(st *deviceState, fix mqtt.Fix) string {
 		return "static"
 	}
 
-	if f.cfg.MaxSpeed > 0 {
-		// Skip the check when the timestamps can't be compared sensibly
-		// (same second, clock reset, long gap).
-		dt := fix.Time.Sub(st.last.Time).Hours()
-		if dt > 0 && dt <= 1 && distanceKm(st.last, fix)/dt > f.cfg.MaxSpeed {
-			st.rejected++
-			if st.rejected < maxConsecutiveRejects {
-				return "speed"
-			}
+	// Skip the speed checks when the timestamps can't be compared sensibly
+	// (same second, clock reset, long gap).
+	dt := fix.Time.Sub(st.last.Time).Hours()
+	if dt > 0 && dt <= 1 && f.tooFast(st.last, fix, distanceKm(st.last, fix), dt) {
+		st.rejected++
+		if st.rejected < maxConsecutiveRejects {
+			return "speed"
 		}
 	}
 
 	return ""
+}
+
+func (f *Filter) tooFast(last, fix mqtt.Fix, distKm, hours float64) bool {
+	implied := distKm / hours
+
+	if f.cfg.MaxSpeed > 0 && implied > f.cfg.MaxSpeed {
+		return true
+	}
+
+	if f.cfg.JumpDistance > 0 && distKm*1000 > f.cfg.JumpDistance {
+		reported := math.Max(last.Speed, fix.Speed)
+		return implied > reported*f.cfg.SpeedFactor+f.cfg.SpeedMargin
+	}
+
+	return false
 }
 
 // distanceKm returns the great-circle distance between two fixes.

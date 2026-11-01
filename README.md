@@ -35,6 +35,9 @@ Holds back implausible GPS fixes, similar to Traccar's position filters. A rejec
 * `MinSatellites` - reject fixes with fewer satellites, if the tracker reports them (default `0`, disabled)
 * `MaxSpeed` - reject jumps implying a speed above this many km/h (default `250`, `0` disables)
 * `StaticSpeed` - hold the position while the reported speed is below this many km/h, which removes drift while parked (default `1`, `0` disables)
+* `JumpDistance`, `SpeedFactor`, `SpeedMargin` - reject jumps longer than `JumpDistance` metres that imply a speed above the speed reported by the tracker * `SpeedFactor` + `SpeedMargin` km/h (defaults `100`, `1.5`, `20`; `JumpDistance = 0` disables)
+
+Speeds between fixes are measured from the time the position last changed, so a tracker that repeats a frozen position while driving and then catches up isn't mistaken for a jump.
 
 ### meta blocks
 

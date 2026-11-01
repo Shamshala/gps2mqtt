@@ -77,6 +77,51 @@ func TestRecoversFromBadReference(t *testing.T) {
 	assert.Equal(t, "", reason)
 }
 
+func TestAcceptsCatchUpAfterFrozenPosition(t *testing.T) {
+	f := New(DefaultConfig())
+	f.Apply("dev", moving(0, 50.0870, 14.4210))
+
+	// Tracker repeats the same coordinates for a minute while driving at 50 km/h.
+	for sec := 10; sec <= 60; sec += 10 {
+		reason, _ := f.Apply("dev", moving(sec, 50.0870, 14.4210))
+		assert.Equal(t, "", reason, sec)
+	}
+
+	// ~970 m catch-up: 350 km/h over the last 10 s, but 50 km/h since the
+	// position froze.
+	reason, _ := f.Apply("dev", moving(70, 50.0957, 14.4210))
+	assert.Equal(t, "", reason)
+}
+
+func TestRejectsJumpFasterThanReported(t *testing.T) {
+	f := New(DefaultConfig())
+
+	p := moving(0, 50.0870, 14.4210)
+	p.fix.Speed = 30
+	f.Apply("dev", p)
+
+	// ~400 m in 10 s = 144 km/h, under MaxSpeed but well above 30 * 1.5 + 20.
+	p = moving(10, 50.0906, 14.4210)
+	p.fix.Speed = 30
+	reason, _ := f.Apply("dev", p)
+	assert.Equal(t, "speed", reason)
+	assert.Equal(t, 50.0870, p.fix.Latitude)
+}
+
+func TestIgnoresShortJumps(t *testing.T) {
+	f := New(DefaultConfig())
+
+	p := moving(0, 50.0870, 14.4210)
+	p.fix.Speed = 5
+	f.Apply("dev", p)
+
+	// ~90 m in 10 s = 32 km/h at a reported 5 km/h, but below JumpDistance.
+	p = moving(10, 50.0878, 14.4210)
+	p.fix.Speed = 5
+	reason, _ := f.Apply("dev", p)
+	assert.Equal(t, "", reason)
+}
+
 func TestHoldsWhileStanding(t *testing.T) {
 	f := New(DefaultConfig())
 	f.Apply("dev", moving(0, 50.0870, 14.4210))
