@@ -120,7 +120,7 @@ func (l *Listener) CheckWhitelist(p *Packet) bool {
 func (l *Listener) Setup(config protocol.Configerer) error {
 	l.Listen = ":5015"
 	l.WriteTimeout = time.Second
-	l.ReadTimeout = time.Minute
+	l.ReadTimeout = 6 * time.Minute // tracker reports every 5 minutes with ACC off
 
 	if err := config.ProtocolConfiguration(Name, l); err != nil {
 		return err

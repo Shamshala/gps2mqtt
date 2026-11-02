@@ -30,6 +30,7 @@ Provides configuation for the http status endpoint
 Holds back implausible GPS fixes, similar to Traccar's position filters. A rejected fix is published with the last accepted coordinates and a `position_filter` attribute naming the reason, so the rest of the data still arrives. Currently applies to the huabao protocol.
 
 * `Enabled` - turn the filter on or off (default `true`)
+* `MaxAge` - don't publish reports older than this, or older than a report already published; trackers replay stored reports after a lost connection, often out of order (default `"5m"`, `"0s"` disables the age limit). Needs a correct tracker clock; timestamps more than a day off are not judged.
 * `Invalid` - reject fixes the tracker flags as not valid (default `true`)
 * `Zero` - reject 0,0 coordinates (default `true`)
 * `MinSatellites` - reject fixes with fewer satellites, if the tracker reports them (default `0`, disabled)

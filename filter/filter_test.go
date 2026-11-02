@@ -22,6 +22,13 @@ func (p *fakePacket) HoldPosition(lat, lon float64, reason string) {
 
 var t0 = time.Date(2024, 3, 18, 14, 0, 0, 0, time.UTC)
 
+// newTestFilter pins the current time shortly after the fixes used below.
+func newTestFilter(cfg Config) *Filter {
+	f := New(cfg)
+	f.now = func() time.Time { return t0.Add(2 * time.Minute) }
+	return f
+}
+
 func moving(sec int, lat, lon float64) *fakePacket {
 	return &fakePacket{fix: mqtt.Fix{
 		Time:      t0.Add(time.Duration(sec) * time.Second),
@@ -33,7 +40,7 @@ func moving(sec int, lat, lon float64) *fakePacket {
 }
 
 func TestAcceptsPlausibleTrack(t *testing.T) {
-	f := New(DefaultConfig())
+	f := newTestFilter(DefaultConfig())
 
 	for i, p := range []*fakePacket{
 		moving(0, 50.0870, 14.4210),
@@ -48,7 +55,7 @@ func TestAcceptsPlausibleTrack(t *testing.T) {
 }
 
 func TestRejectsJump(t *testing.T) {
-	f := New(DefaultConfig())
+	f := newTestFilter(DefaultConfig())
 	f.Apply("dev", moving(0, 50.0870, 14.4210))
 
 	// ~11 km in 10 s
@@ -66,7 +73,7 @@ func TestRejectsJump(t *testing.T) {
 }
 
 func TestRecoversFromBadReference(t *testing.T) {
-	f := New(DefaultConfig())
+	f := newTestFilter(DefaultConfig())
 	f.Apply("dev", moving(0, 50.1870, 14.4210)) // outlier accepted as the first fix
 
 	for i := 1; i < maxConsecutiveRejects; i++ {
@@ -79,7 +86,7 @@ func TestRecoversFromBadReference(t *testing.T) {
 }
 
 func TestAcceptsCatchUpAfterFrozenPosition(t *testing.T) {
-	f := New(DefaultConfig())
+	f := newTestFilter(DefaultConfig())
 	f.Apply("dev", moving(0, 50.0870, 14.4210))
 
 	// Tracker repeats the same coordinates for a minute while driving at 50 km/h.
@@ -100,7 +107,7 @@ func withSpeed(p *fakePacket, gps, obd float64) *fakePacket {
 }
 
 func TestRejectsJumpBeyondAcceleration(t *testing.T) {
-	f := New(DefaultConfig())
+	f := newTestFilter(DefaultConfig())
 	f.Apply("dev", withSpeed(moving(0, 50.0870, 14.4210), 30, 0))
 
 	// ~417 m in 10 s = 150 km/h on average, under MaxSpeed, but at 30 km/h
@@ -112,7 +119,7 @@ func TestRejectsJumpBeyondAcceleration(t *testing.T) {
 }
 
 func TestAcceptsHardAcceleration(t *testing.T) {
-	f := New(DefaultConfig())
+	f := newTestFilter(DefaultConfig())
 	f.Apply("dev", withSpeed(moving(0, 50.0870, 14.4210), 5, 0))
 
 	// 5 -> 80 km/h in 10 s, ~120 m.
@@ -121,7 +128,7 @@ func TestAcceptsHardAcceleration(t *testing.T) {
 }
 
 func TestPrefersVehicleSpeed(t *testing.T) {
-	f := New(DefaultConfig())
+	f := newTestFilter(DefaultConfig())
 
 	// GPS says standing, OBD says 30 km/h: not static.
 	reason, _ := f.Apply("dev", withSpeed(moving(0, 50.0870, 14.4210), 0, 30))
@@ -137,7 +144,7 @@ func TestPrefersVehicleSpeed(t *testing.T) {
 func TestDryRun(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.DryRun = true
-	f := New(cfg)
+	f := newTestFilter(cfg)
 
 	zero := moving(0, 0, 0)
 	reason, publish := f.Apply("dev", zero)
@@ -155,6 +162,57 @@ func TestDryRun(t *testing.T) {
 	assert.Equal(t, "speed (dry-run)", p.reason)
 }
 
+func TestDropsOutOfOrderReports(t *testing.T) {
+	f := newTestFilter(DefaultConfig())
+	f.Apply("dev", moving(30, 50.0870, 14.4210))
+
+	// Stored report replayed after a newer one was published.
+	reason, publish := f.Apply("dev", moving(10, 50.0900, 14.4300))
+	assert.Equal(t, "outdated", reason)
+	assert.False(t, publish)
+
+	reason, publish = f.Apply("dev", moving(40, 50.0871, 14.4214))
+	assert.Equal(t, "", reason)
+	assert.True(t, publish)
+}
+
+func TestDropsOldReports(t *testing.T) {
+	f := newTestFilter(DefaultConfig())
+
+	reason, publish := f.Apply("dev", moving(-600, 50.0870, 14.4210)) // 12 minutes old
+	assert.Equal(t, "past", reason)
+	assert.False(t, publish)
+
+	// Doesn't count as published, so the next live report goes through.
+	reason, publish = f.Apply("dev", moving(0, 50.0870, 14.4210))
+	assert.Equal(t, "", reason)
+	assert.True(t, publish)
+}
+
+func TestIgnoresUntrustedClock(t *testing.T) {
+	f := newTestFilter(DefaultConfig())
+	f.Apply("dev", moving(0, 50.0870, 14.4210))
+
+	p := moving(10, 50.0871, 14.4214)
+	p.fix.Time = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	reason, publish := f.Apply("dev", p)
+	assert.Equal(t, "", reason)
+	assert.True(t, publish)
+}
+
+func TestDryRunStale(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DryRun = true
+	f := newTestFilter(cfg)
+	f.Apply("dev", moving(30, 50.0870, 14.4210))
+
+	p := moving(10, 50.0900, 14.4300)
+	reason, publish := f.Apply("dev", p)
+	assert.Equal(t, "outdated", reason)
+	assert.True(t, publish)
+	assert.Equal(t, "outdated (dry-run)", p.reason)
+}
+
 func TestMaxDistance(t *testing.T) {
 	v := 30 / 3.6
 
@@ -166,7 +224,7 @@ func TestMaxDistance(t *testing.T) {
 }
 
 func TestHoldsWhileStanding(t *testing.T) {
-	f := New(DefaultConfig())
+	f := newTestFilter(DefaultConfig())
 	f.Apply("dev", moving(0, 50.0870, 14.4210))
 
 	p := moving(10, 50.0875, 14.4218) // drift while parked
@@ -178,7 +236,7 @@ func TestHoldsWhileStanding(t *testing.T) {
 }
 
 func TestRejectsInvalidAndZero(t *testing.T) {
-	f := New(DefaultConfig())
+	f := newTestFilter(DefaultConfig())
 
 	zero := moving(0, 0, 0)
 	reason, publish := f.Apply("dev", zero)
@@ -196,7 +254,7 @@ func TestRejectsInvalidAndZero(t *testing.T) {
 }
 
 func TestDevicesAreIndependent(t *testing.T) {
-	f := New(DefaultConfig())
+	f := newTestFilter(DefaultConfig())
 	f.Apply("a", moving(0, 50.0870, 14.4210))
 
 	reason, _ := f.Apply("b", moving(10, 49.1950, 16.6080))
@@ -206,7 +264,7 @@ func TestDevicesAreIndependent(t *testing.T) {
 func TestDisabled(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Enabled = false
-	f := New(cfg)
+	f := newTestFilter(cfg)
 
 	p := moving(0, 0, 0)
 	reason, publish := f.Apply("dev", p)

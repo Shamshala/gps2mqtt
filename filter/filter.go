@@ -6,11 +6,17 @@ package filter
 
 import (
 	"math"
+	"time"
 
 	"github.com/freman/gps2mqtt/mqtt"
 )
 
 type Config struct {
+	// Reports older than MaxAge, or older than one already published, are
+	// not published at all: trackers replay stored reports after losing the
+	// connection, often out of order. 0 disables the age check.
+	MaxAge time.Duration
+
 	Enabled       bool
 	DryRun        bool    // only mark rejected fixes, keep their coordinates
 	Invalid       bool    // reject fixes the device flags as not valid
@@ -30,6 +36,7 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{
+		MaxAge:          5 * time.Minute,
 		Enabled:         true,
 		Invalid:         true,
 		Zero:            true,
@@ -46,24 +53,27 @@ func DefaultConfig() Config {
 const maxConsecutiveRejects = 3
 
 type deviceState struct {
-	last     mqtt.Fix
+	last     mqtt.Fix // last accepted fix, valid when hasLast
+	hasLast  bool
 	rejected int
+	newest   time.Time // newest report published
 }
 
 // Filter keeps per-device state. It is not safe for concurrent use.
 type Filter struct {
 	cfg   Config
 	state map[string]*deviceState
+	now   func() time.Time
 }
 
 func New(cfg Config) *Filter {
-	return &Filter{cfg: cfg, state: make(map[string]*deviceState)}
+	return &Filter{cfg: cfg, state: make(map[string]*deviceState), now: time.Now}
 }
 
 // Apply checks the fix of p against the last accepted one for device and
 // holds the position if it is rejected. It returns the rejection reason
 // ("" when accepted) and false when the message should not be published at
-// all because there is no earlier position to fall back on.
+// all, because it is stale or there is no earlier position to fall back on.
 func (f *Filter) Apply(device string, p mqtt.Positioner) (string, bool) {
 	if !f.cfg.Enabled {
 		return "", true
@@ -71,17 +81,34 @@ func (f *Filter) Apply(device string, p mqtt.Positioner) (string, bool) {
 
 	fix := p.GPSFix()
 	st := f.state[device]
+	if st == nil {
+		st = &deviceState{}
+		f.state[device] = st
+	}
+
+	if reason := f.stale(st, fix.Time); reason != "" {
+		if f.cfg.DryRun {
+			p.HoldPosition(fix.Latitude, fix.Longitude, reason+" (dry-run)")
+			return reason, true
+		}
+
+		return reason, false
+	}
+
+	if f.clockTrusted(fix.Time) && fix.Time.After(st.newest) {
+		st.newest = fix.Time
+	}
 
 	reason := f.check(st, fix)
 	if reason == "" {
 		// Trackers sometimes repeat a frozen position while driving and then
 		// catch up. Keep the time the position was first reported so the
 		// catch-up jump is judged over the whole interval.
-		if st != nil && fix.Latitude == st.last.Latitude && fix.Longitude == st.last.Longitude {
+		if st.hasLast && fix.Latitude == st.last.Latitude && fix.Longitude == st.last.Longitude {
 			return "", true
 		}
 
-		f.state[device] = &deviceState{last: fix}
+		st.last, st.hasLast, st.rejected = fix, true, 0
 		return "", true
 	}
 
@@ -90,12 +117,36 @@ func (f *Filter) Apply(device string, p mqtt.Positioner) (string, bool) {
 		return reason, true
 	}
 
-	if st == nil {
+	if !st.hasLast {
 		return reason, false
 	}
 
 	p.HoldPosition(st.last.Latitude, st.last.Longitude, reason)
 	return reason, true
+}
+
+// clockTrusted reports whether t is close enough to the current time to
+// judge reports by it. A tracker without a GNSS time may send a wildly
+// wrong clock.
+func (f *Filter) clockTrusted(t time.Time) bool {
+	age := f.now().Sub(t)
+	return age > -time.Minute && age < 24*time.Hour
+}
+
+func (f *Filter) stale(st *deviceState, t time.Time) string {
+	if !f.clockTrusted(t) {
+		return ""
+	}
+
+	if t.Before(st.newest) {
+		return "outdated"
+	}
+
+	if f.cfg.MaxAge > 0 && f.now().Sub(t) > f.cfg.MaxAge {
+		return "past"
+	}
+
+	return ""
 }
 
 func (f *Filter) check(st *deviceState, fix mqtt.Fix) string {
@@ -108,7 +159,7 @@ func (f *Filter) check(st *deviceState, fix mqtt.Fix) string {
 		return "satellites"
 	}
 
-	if st == nil {
+	if !st.hasLast {
 		return ""
 	}
 

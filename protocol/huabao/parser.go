@@ -87,7 +87,7 @@ func (p *Parser) ReadPacket() (packet *Packet, err error) {
 		if err := binary.Read(bodyBuf, binary.BigEndian, &p.terminalInfo); err != nil {
 			return nil, err
 		}
-	case protoLocationReport:
+	case protoLocationReport, protoTripStart, protoTripEnd:
 		var rep basicLocationInformation
 		binary.Read(bodyBuf, binary.BigEndian, &rep)
 		packet.importBasicInformation(rep)

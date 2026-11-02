@@ -3,7 +3,6 @@ package huabao
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -19,6 +18,9 @@ const (
 	protoGeneralResponse  uint16 = 0x8001
 	protoHeartbeat        uint16 = 0x0002
 	protoLocationReport   uint16 = 0x0200
+	protoTripStart        uint16 = 0x0202
+	protoTripEnd          uint16 = 0x0203
+	protoTerminalResponse uint16 = 0x0001
 )
 
 type properties uint16
@@ -154,11 +156,14 @@ func (p *Packet) Respond(wr io.Writer) error {
 	switch p.header.MessageType {
 	case protoRegister:
 		return p.respondToRegister(wr)
-	case protoTerminalAuth, protoHeartbeat, protoLocationReport:
-		return p.sendGeneralResponse(wr)
+	case protoTerminalResponse:
+		return nil
 	}
 
-	return errors.New("unknown message type")
+	// JT/T 808 acknowledges every other terminal message with a platform
+	// general response. Unacknowledged messages, e.g. trip start/end, are
+	// resent by the terminal.
+	return p.sendGeneralResponse(wr)
 }
 
 func (p *Packet) respondToRegister(wr io.Writer) error {
@@ -203,8 +208,15 @@ func (p *Packet) WantResponse() bool {
 	return true
 }
 
+// Valid reports whether the packet carries a location. Trip start/end use
+// the same body as a location report.
 func (p *Packet) Valid() bool {
-	return p.header.MessageType == protoLocationReport
+	switch p.header.MessageType {
+	case protoLocationReport, protoTripStart, protoTripEnd:
+		return true
+	}
+
+	return false
 }
 
 func (p *Packet) importBasicInformation(rep basicLocationInformation) {
