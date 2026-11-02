@@ -1,24 +1,23 @@
 package huabao
 
 import (
-	"bufio"
 	"bytes"
 	"io"
 )
 
 type reader struct {
-	*bufio.Reader
+	io.ByteReader
 }
 
 func (r reader) Read(p []byte) (n int, err error) {
 	for i := 0; i < len(p); i++ {
-		p[i], err = r.Reader.ReadByte()
+		p[i], err = r.ByteReader.ReadByte()
 		if err != nil {
 			return i, err
 		}
 
 		if p[i] == 0x7d {
-			tmp, err := r.Reader.ReadByte()
+			tmp, err := r.ByteReader.ReadByte()
 			if err != nil {
 				return i, err
 			}

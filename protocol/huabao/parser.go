@@ -12,6 +12,7 @@ import (
 
 type Parser struct {
 	reader *bufio.Reader
+	raw    []byte // bytes of the current packet as received, for logging
 
 	terminalInfo struct {
 		ManufacturerID [5]byte
@@ -20,8 +21,24 @@ type Parser struct {
 	}
 }
 
+// ReadByte reads from the stream and records the byte in Raw.
+func (p *Parser) ReadByte() (byte, error) {
+	b, err := p.reader.ReadByte()
+	if err == nil {
+		p.raw = append(p.raw, b)
+	}
+
+	return b, err
+}
+
+// Raw returns the bytes of the last packet read (or attempted) as they came
+// off the wire, escaping included.
+func (p *Parser) Raw() []byte {
+	return p.raw
+}
+
 func (p *Parser) read(d []byte) (err error) {
-	sz, err := reader{p.reader}.Read(d)
+	sz, err := reader{p}.Read(d)
 	if err != nil {
 		return err
 	}
@@ -34,7 +51,9 @@ func (p *Parser) read(d []byte) (err error) {
 }
 
 func (p *Parser) ReadPacket() (packet *Packet, err error) {
-	preamble, err := p.reader.ReadByte()
+	p.raw = p.raw[:0]
+
+	preamble, err := p.ReadByte()
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +63,7 @@ func (p *Parser) ReadPacket() (packet *Packet, err error) {
 	}
 
 	var head header
-	if err := binary.Read(reader{p.reader}, binary.BigEndian, &head); err != nil {
+	if err := binary.Read(reader{p}, binary.BigEndian, &head); err != nil {
 		return nil, fmt.Errorf("failed to read header: %w", err)
 	}
 
@@ -65,7 +84,7 @@ func (p *Parser) ReadPacket() (packet *Packet, err error) {
 	}
 	_ = checksum //todo check checksum
 
-	tail, err := p.reader.ReadByte()
+	tail, err := p.ReadByte()
 	if err != nil {
 		return nil, err
 	}

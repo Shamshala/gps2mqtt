@@ -2,7 +2,9 @@ package huabao
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"syscall"
@@ -74,10 +76,16 @@ func (l *Listener) HandleConnection(c net.Conn, chMsg chan mqtt.Identifier, log 
 				return
 			}
 
-			log.Error().Err(err).Msg("Failed to read packet.")
+			log.Error().Err(err).Hex("raw", p.Raw()).Msg("Failed to read packet.")
 
 			return
 		}
+
+		log.Debug().
+			Str("device", packet.Device()).
+			Str("type", fmt.Sprintf("%04x", packet.header.MessageType)).
+			Hex("raw", p.Raw()).
+			Msg("Packet received.")
 
 		if err := c.SetReadDeadline(time.Time{}); err != nil {
 			log.Error().Err(err).Msg("Failed to clear a read deadline.")
@@ -99,8 +107,15 @@ func (l *Listener) HandleConnection(c net.Conn, chMsg chan mqtt.Identifier, log 
 				return
 			}
 
-			if err := packet.Respond(c); err != nil {
-				log.Error().Err(err).Msg("Failed to finish handshake.")
+			var resp bytes.Buffer
+			if err := packet.Respond(&resp); err != nil {
+				log.Error().Err(err).Msg("Failed to build response.")
+			} else if resp.Len() > 0 {
+				log.Debug().Hex("raw", resp.Bytes()).Msg("Sending response.")
+
+				if _, err := c.Write(resp.Bytes()); err != nil {
+					log.Error().Err(err).Msg("Failed to send response.")
+				}
 			}
 
 			if err := c.SetWriteDeadline(time.Time{}); err != nil {
